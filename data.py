@@ -60,73 +60,73 @@ class RandomChannelsSwap:
             )
         if not _is_pil_image(depth):
             raise TypeError(
-                'image should be PIL image. Got {}'.format(type(image))
+                'depth should be PIL image. Got {}'.format(type(depth))
             )
 
         if random.random() < self.p:
-            image = np.asarray(image)
-            image = Image.fromarray(image[..., self.indices])
+            image_np = np.array(image)  # Convert to numpy array
+            # Ensure the shape is correct
+            if image_np.ndim == 3 and image_np.shape[2] == 3:  # Check if image has 3 channels
+                # Randomly swap channels
+                permuted_indices = random.choice(self.indices)  # Pick one random permutation
+                image_np = image_np[..., permuted_indices]  # Swap channels
+                image = Image.fromarray(image_np)  # Convert back to PIL image
+            else:
+                raise ValueError("Input image does not have 3 channels")
 
-        return { 'image': image, 'depth' : depth}
+        return {'image': image, 'depth': depth}
+
+
+import torch
+import numpy as np
+from PIL import Image
 
 class ToTensor:
-    def __init__(self, is_test = True):
+    def __init__(self, is_test=True):
         self.is_test = is_test
 
     def to_tensor(self, image):
-        if (not _is_pil_image(image)) or (not is_numpy_image(image)):
-            raise TypeError([
-                'image should be PIL image or numpy image. Got {}'.format(type(image))
-            ])
-
         if isinstance(image, np.ndarray):
+            # Convert numpy array to tensor and change from HWC to CHW format
             img = torch.from_numpy(image.transpose(2, 0, 1))
-            return img.float().div(255)
+            return img.float() / 255  # Normalize to [0, 1]
 
-        if image.mode == 'I':
-            img = torch.from_numpy(np.array(image, np.int32, copy=False))
-        elif image.mode == 'I;16':
-            img = torch.from_numpy(np.array(image, np.int16, copy=False))
-        else:
-            img = torch.ByteTensor(
-                torch.ByteStorage.from_buffer(image.tobytes()))
+        if not _is_pil_image(image):
+            raise TypeError('Image should be a PIL Image. Got {}'.format(type(image)))
 
-        # PIL image mode: 1, L, P, I, F, RGB, YCbCr, RGBA, CMYK
-        if image.mode == 'YCbCr':
-            nchannel = 3
-        elif image.mode == 'I;16':
-            nchannel = 1
-        else:
-            nchannel = len(image.mode)
+        # Convert PIL image to numpy array and then to tensor
+        img = np.array(image)
 
-        img = img.view(image.size[1], image.size[0], nchannel)
+        if img.ndim == 2:  # Grayscale image
+            img = img[:, :, np.newaxis]  # Add channel dimension
 
-        img = img.transpose(0, 1).transpose(0, 2).contiguous()
+        img = torch.from_numpy(img.transpose(2, 0, 1))  # Change from HWC to CHW format
 
-        if isinstance(img, torch.ByteTensor):
-            return img.float().div(255)
-        else:
-            return img
+        return img.float() / 255  # Normalize to [0, 1]
 
     def __call__(self, sample):
         image, depth = sample['image'], sample['depth']
 
+        # Resize images
+        image = image.resize((320, 240))  # Resize to desired dimensions
+        depth = depth.resize((320, 240))  # Resize to desired dimensions
+
+        # Convert to tensor
         image = self.to_tensor(image)
+        depth = self.to_tensor(depth)
 
-        depth = depth.resize((320, 240))
-
+        # Adjust depth based on whether it's for testing or training
         if self.is_test:
-            depth = self.to_tensor(depth).float() / 1000
+            depth = depth.float() / 10
         else:
-            depth = self.to_tensor(depth).float() * 1000
+            depth = depth.float() * 10
 
-        depth = torch.clamp(depth, 10, 1000)
-
-        return { 'image': image, 'depth' : depth}
+        return {'image': image, 'depth': depth}
 
 def noTransform( is_test = False):
     return transforms.Compose([
         ToTensor(is_test = is_test),
+        #transforms.Resize((224,224))
     ])
 
 def getTransform():
@@ -134,6 +134,7 @@ def getTransform():
         RandomHorizontalFlip(0.5),
         RandomChannelsSwap(0.5),
         ToTensor(),
+        #transforms.Resize((224, 224))
     ])
 
 class DepthDataset(Dataset):
@@ -141,7 +142,8 @@ class DepthDataset(Dataset):
         self.transform = transform
         self.image_path = image_path
         self.depth_path = depth_path
-
+    def __len__(self):
+        return len(self.image_path)
     def __getitem__(self, idx):
         images = Image.open(self.image_path[idx])
         depths = Image.open(self.depth_path[idx])
@@ -165,14 +167,13 @@ def getPath(): # nyu2 dataset
     train_image_path = np.array(glob.glob(r'data/image_depth_train/image/*.jpg'))
     train_depth_path = np.array(glob.glob(r'data/image_depth_train/depth/*.png'))
 
-    test_image_path = np.array(glob.glob(r'data/image_depth_test/image/*.jpg'))
-    test_depth_path = np.array(glob.glob(r'data/image_depth_test/depth/*.jpg'))
+    test_image_path = np.array(glob.glob(r'data/image_depth_test/image/*.png'))
+    test_depth_path = np.array(glob.glob(r'data/image_depth_test/depth/*.png'))
 
     return { 'train_image' : train_image_path,
              'train_depth': train_depth_path,
              'test_image': test_image_path,
              'test_depth' : test_depth_path}
-
 
 
 
